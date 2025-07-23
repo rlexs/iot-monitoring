@@ -1,5 +1,6 @@
 // ✅ server.js – Full backend dengan Socket.IO, MongoDB, REST API
 require('dotenv').config();
+require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
