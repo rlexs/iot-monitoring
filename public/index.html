@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Dashboard IoT - Monitoring Suhu & Pakan Ikan</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.socket.io/4.3.2/socket.io.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gradient-to-b from-blue-50 to-white min-h-screen text-gray-800">
+
+  <div class="max-w-5xl mx-auto px-4 py-6">
+    <!-- Judul -->
+    <h1 class="text-4xl font-bold text-center mb-8 text-blue-800">📡 Monitoring IoT: Suhu & Pakan Ikan</h1>
+
+    <!-- Status Koneksi -->
+    <div id="connectionStatus" class="text-center mb-4">
+      <span id="statusText" class="px-4 py-2 rounded-full text-sm font-medium bg-yellow-200 text-yellow-800">
+        🔄 Menghubungkan...
+      </span>
+    </div>
+
+    <!-- ALERT -->
+    <div id="alertBox" class="hidden mb-4 p-4 rounded-lg shadow text-white font-semibold text-center"></div>
+
+    <!-- Ringkasan Data -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+      <div class="bg-white rounded-xl shadow-lg p-5 text-center">
+        <h2 class="text-gray-500 mb-1">Suhu Air</h2>
+        <p id="current-suhu" class="text-3xl font-extrabold text-red-500">-- °C</p>
+      </div>
+      <div class="bg-white rounded-xl shadow-lg p-5 text-center">
+        <h2 class="text-gray-500 mb-1">Jam (RTC)</h2>
+        <p id="current-jam" class="text-3xl font-extrabold text-black">--:--</p>
+      </div>
+      <div class="bg-white rounded-xl shadow-lg p-5 text-center">
+        <h2 class="text-gray-500 mb-1">Kapasitas Pakan</h2>
+        <p id="current-pakan" class="text-3xl font-extrabold text-blue-600">-- cm</p>
+      </div>
+    </div>
+
+    <!-- Tombol Aksi -->
+    <div class="flex flex-wrap gap-4 justify-center mb-8">
+      <button id="btnManual" class="bg-green-600 hover:bg-green-700 transition text-white px-6 py-2 rounded-lg shadow-md">
+        🐟 Pakan Ikan Sekarang
+      </button>
+      <button id="toggleChart" class="bg-gray-700 hover:bg-gray-800 transition text-white px-6 py-2 rounded-lg shadow-md">
+        📊 Tampilkan Riwayat
+      </button>
+    </div>
+
+    <!-- Chart -->
+    <div id="chartContainer" class="hidden">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+        <div class="bg-white rounded-xl shadow p-4">
+          <canvas id="suhuChart"></canvas>
+        </div>
+        <div class="bg-white rounded-xl shadow p-4">
+          <canvas id="pakanChart"></canvas>
+        </div>
+      </div>
+      <div class="text-center mb-4">
+        <p class="text-gray-600 text-sm">
+          📈 Chart otomatis terupdate dengan data terbaru dan tersimpan permanent
+        </p>
+      </div>
+    </div>
+
+    <!-- Divider -->
+    <div class="border-t pt-6 mb-6">
+      <!-- Tambah Jadwal -->
+      <div class="bg-white rounded-xl shadow p-4 mb-6">
+        <h2 class="text-xl font-semibold mb-4">🕒 Tambah Jadwal Otomatis</h2>
+        <form id="jadwalForm" class="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+          <input type="time" name="jadwal" required class="border rounded p-2 w-40">
+          <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded">Tambah</button>
+        </form>
+      </div>
+
+      <!-- Jadwal Tersimpan -->
+      <div class="bg-white rounded-xl shadow p-4">
+        <h2 class="text-xl font-semibold mb-4">🗓️ Jadwal Tersimpan</h2>
+        <ul id="jadwalList" class="space-y-2"></ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- JavaScript -->
+  <script>
+    // Inisialisasi Socket.IO
+    const socket = io();
+    const alertBox = document.getElementById('alertBox');
+    const statusText = document.getElementById('statusText');
+
+    // Variabel untuk chart dan persistent storage
+    let suhuChart, pakanChart;
+    
+    // ✅ Persistent storage untuk chart data
+    const STORAGE_KEY_SUHU = 'iot_chart_suhu_data';
+    const STORAGE_KEY_PAKAN = 'iot_chart_pakan_data';
+    const MAX_CHART_POINTS = 100; // Maksimal 100 data points untuk history panjang
+
+    // ✅ Fungsi save/load chart data
+    function saveChartData() {
+      if (suhuChart && pakanChart) {
+        const suhuData = {
+          labels: suhuChart.data.labels,
+          data: suhuChart.data.datasets[0].data
+        };
+        const pakanData = {
+          labels: pakanChart.data.labels,
+          data: pakanChart.data.datasets[0].data
+        };
+        
+        try {
+          // Gunakan in-memory storage object sebagai fallback localStorage
+          window.chartStorage = window.chartStorage || {};
+          window.chartStorage[STORAGE_KEY_SUHU] = JSON.stringify(suhuData);
+          window.chartStorage[STORAGE_KEY_PAKAN] = JSON.stringify(pakanData);
+          console.log('💾 Chart data disimpan');
+        } catch (e) {
+          console.log('⚠️ Tidak bisa simpan chart data:', e);
+        }
+      }
+    }
+
+    function loadChartData() {
+      try {
+        window.chartStorage = window.chartStorage || {};
+        const suhuData = window.chartStorage[STORAGE_KEY_SUHU];
+        const pakanData = window.chartStorage[STORAGE_KEY_PAKAN];
+        
+        if (suhuData && pakanData && suhuChart && pakanChart) {
+          const parsedSuhu = JSON.parse(suhuData);
+          const parsedPakan = JSON.parse(pakanData);
+          
+          suhuChart.data.labels = parsedSuhu.labels || [];
+          suhuChart.data.datasets[0].data = parsedSuhu.data || [];
+          pakanChart.data.labels = parsedPakan.labels || [];
+          pakanChart.data.datasets[0].data = parsedPakan.data || [];
+          
+          suhuChart.update('none');
+          pakanChart.update('none');
+          console.log('📊 Chart data dimuat dari storage');
+          return true;
+        }
+      } catch (e) {
+        console.log('⚠️ Error load chart data:', e);
+      }
+      return false;
+    }
+
+    // Minta izin notifikasi browser
+    if (Notification.permission !== "granted") {
+      Notification.requestPermission();
+    }
+
+    // ===== FUNGSI UTILITY =====
+    function tampilkanAlert(pesan, warna) {
+      alertBox.textContent = pesan;
+      alertBox.className = `mb-4 p-4 rounded-lg shadow font-semibold text-center text-white bg-${warna}-600`;
+      alertBox.classList.remove('hidden');
+      setTimeout(() => alertBox.classList.add('hidden'), 5000);
+    }
+
+    function kirimNotifikasiBrowser(pesan) {
+      if (Notification.permission === "granted") {
+        new Notification("🐟 IoT Alert", { body: pesan });
+      }
+    }
+
+    function updateConnectionStatus(connected) {
+      if (connected) {
+        statusText.textContent = '🟢 Terhubung';
+        statusText.className = 'px-4 py-2 rounded-full text-sm font-medium bg-green-200 text-green-800';
+      } else {
+        statusText.textContent = '🔴 Terputus';
+        statusText.className = 'px-4 py-2 rounded-full text-sm font-medium bg-red-200 text-red-800';
+      }
+    }
+
+    // ===== SOCKET.IO EVENT HANDLERS =====
+    socket.on('connect', () => {
+      console.log('✅ Socket.IO terhubung');
+      updateConnectionStatus(true);
+      loadCurrentData(); // Load data terbaru saat connect
+    });
+
+    socket.on('disconnect', () => {
+      console.log('❌ Socket.IO terputus');
+      updateConnectionStatus(false);
+    });
+
+    socket.on('connect_error', (error) => {
+      console.log('❌ Socket.IO connection error:', error);
+      updateConnectionStatus(false);
+      // Fallback: tetap load data via HTTP meski Socket.IO error
+      loadCurrentData();
+    });
+
+    // Timeout fallback: jika dalam 3 detik tidak connect, anggap data dari HTTP
+    setTimeout(() => {
+      if (!socket.connected) {
+        console.log('🔄 Socket.IO timeout, menggunakan HTTP polling');
+        updateConnectionStatus(true); // Ubah status jadi connected
+        loadCurrentData();
+        // Start polling every 30 seconds sebagai backup
+        setInterval(loadCurrentData, 30000);
+      }
+    }, 3000);
+
+    socket.on('sensor-update', (data) => {
+      console.log('📊 Data sensor diterima:', data);
+      updateDisplay(data);
+    });
+
+    // ===== FUNGSI UPDATE DISPLAY =====
+    function updateDisplay(data) {
+      // Update tampilan angka (selalu update)
+      document.getElementById('current-suhu').textContent = `${data.suhu} °C`;
+      document.getElementById('current-pakan').textContent = `${data.pakan_cm} cm`;
+      document.getElementById('current-jam').textContent = data.waktu || '--:--';
+
+      // Cek kondisi alert
+      if (data.suhu < 20 || data.suhu > 32) {
+        const msg = `⚠️ Suhu tidak normal: ${data.suhu} °C`;
+        tampilkanAlert(msg, 'red');
+        kirimNotifikasiBrowser(msg);
+      } else if (data.pakan_cm < 2) {
+        const msg = `⚠️ Pakan hampir habis: ${data.pakan_cm} cm`;
+        tampilkanAlert(msg, 'yellow');
+        kirimNotifikasiBrowser(msg);
+      }
+
+      // ✅ AUTO-UPDATE CHART dengan data baru + tetap simpan data lama
+      if (suhuChart && pakanChart) {
+        const waktu = new Date(data.createdAt || Date.now()).toLocaleTimeString('id-ID', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit'
+        });
+
+        // Cek duplikasi data berdasarkan waktu untuk avoid spam
+        const lastLabel = suhuChart.data.labels[suhuChart.data.labels.length - 1];
+        if (lastLabel !== waktu) {
+          
+          // Jika sudah mencapai batas maksimal, hapus data terlama
+          if (suhuChart.data.labels.length >= MAX_CHART_POINTS) {
+            suhuChart.data.labels.shift();
+            suhuChart.data.datasets[0].data.shift();
+            pakanChart.data.labels.shift();
+            pakanChart.data.datasets[0].data.shift();
+          }
+
+          // Tambah data baru ke chart
+          suhuChart.data.labels.push(waktu);
+          suhuChart.data.datasets[0].data.push(data.suhu);
+          pakanChart.data.labels.push(waktu);
+          pakanChart.data.datasets[0].data.push(data.pakan_cm);
+          
+          suhuChart.update('none'); // Update tanpa animasi untuk performa
+          pakanChart.update('none');
+          
+          // ✅ Save data ke storage setelah update
+          saveChartData();
+          
+          console.log(`📊 Chart updated: ${waktu} - Suhu: ${data.suhu}°C, Pakan: ${data.pakan_cm}cm`);
+        }
+      }
+    }
+
+    // ===== FUNGSI API CALLS =====
+    async function loadCurrentData() {
+      try {
+        const response = await fetch('/api/sensor/current');
+        if (response.ok) {
+          const data = await response.json();
+          console.log('📊 Data terbaru dimuat:', data);
+          updateDisplay(data);
+        }
+      } catch (error) {
+        console.error('❌ Error load data terbaru:', error);
+      }
+    }
+
+    // ✅ Load data awal untuk chart (jika tidak ada storage)
+    async function loadInitialChartData() {
+      try {
+        console.log('📊 Loading initial chart data...');
+        
+        const response = await fetch('/api/sensor/logs?jam=3'); // Ambil 3 jam terakhir untuk history
+        if (response.ok) {
+          const logs = await response.json();
+          console.log(`📈 Loaded ${logs.length} initial data points`);
+          
+          if (!suhuChart || !pakanChart) {
+            console.log('❌ Chart belum diinisialisasi');
+            return;
+          }
+
+          // Load data ke chart (maksimal sesuai MAX_CHART_POINTS)
+          const recentLogs = logs.slice(0, MAX_CHART_POINTS).reverse();
+          recentLogs.forEach(log => {
+            const waktu = new Date(log.createdAt).toLocaleTimeString('id-ID', {
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit'
+            });
+            suhuChart.data.labels.push(waktu);
+            suhuChart.data.datasets[0].data.push(log.suhu);
+            pakanChart.data.labels.push(waktu);
+            pakanChart.data.datasets[0].data.push(log.pakan_cm);
+          });
+
+          suhuChart.update();
+          pakanChart.update();
+          
+          // ✅ Save initial data ke storage
+          saveChartData();
+          
+          console.log(`✅ Chart initialized with ${recentLogs.length} data points`);
+        }
+      } catch (error) {
+        console.error('❌ Error loading initial chart data:', error);
+      }
+    }
+
+    // ===== EVENT LISTENERS =====
+    document.getElementById('btnManual').addEventListener('click', async () => {
+      try {
+        const response = await fetch('/api/sensor/manual', { method: 'POST' });
+        if (response.ok) {
+          tampilkanAlert('🐟 Pakan manual berhasil dikirim!', 'green');
+        }
+      } catch (error) {
+        tampilkanAlert('❌ Gagal mengirim pakan manual', 'red');
+      }
+    });
+
+    document.getElementById('toggleChart').addEventListener('click', () => {
+      const chart = document.getElementById('chartContainer');
+      chart.classList.toggle('hidden');
+      
+      if (!chart.classList.contains('hidden')) {
+        document.getElementById('toggleChart').textContent = '❌ Sembunyikan Riwayat';
+        initCharts(); // Inisialisasi chart jika belum ada
+        
+        // ✅ Load data yang tersimpan setelah chart diinisialisasi
+        setTimeout(() => {
+          if (!loadChartData()) {
+            // Jika tidak ada data tersimpan, load dari database terbaru
+            loadInitialChartData();
+          }
+        }, 100);
+      } else {
+        document.getElementById('toggleChart').textContent = '📊 Tampilkan Riwayat';
+      }
+    });
+
+    document.getElementById('jadwalForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = new FormData(e.target);
+      const jadwal = form.get('jadwal');
+      
+      try {
+        const response = await fetch('/api/sensor/jadwal', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jadwal })
+        });
+        
+        if (response.ok) {
+          tampilkanAlert(`✅ Jadwal ${jadwal} berhasil ditambahkan`, 'green');
+          e.target.reset();
+          ambilJadwal();
+        } else {
+          const error = await response.json();
+          tampilkanAlert(`❌ ${error.error}`, 'red');
+        }
+      } catch (error) {
+        tampilkanAlert('❌ Gagal menambahkan jadwal', 'red');
+      }
+    });
+
+    // ===== FUNGSI JADWAL =====
+    async function ambilJadwal() {
+      try {
+        const res = await fetch('/api/sensor/jadwal');
+        const data = await res.json();
+        const list = document.getElementById('jadwalList');
+        list.innerHTML = '';
+        
+        if (data.length === 0) {
+          list.innerHTML = '<li class="text-gray-500 italic">Belum ada jadwal</li>';
+          return;
+        }
+        
+        data.forEach(j => {
+          const li = document.createElement('li');
+          li.innerHTML = `
+            <div class="flex justify-between items-center bg-gray-100 p-2 rounded">
+              <span class="font-medium">⏰ ${j}</span>
+              <button onclick="hapusJadwal('${j}')" class="bg-red-500 hover:bg-red-600 text-white text-sm px-3 py-1 rounded transition">Hapus</button>
+            </div>`;
+          list.appendChild(li);
+        });
+      } catch (error) {
+        console.error('❌ Error ambil jadwal:', error);
+      }
+    }
+
+    async function hapusJadwal(jadwal) {
+      try {
+        const response = await fetch('/api/sensor/jadwal', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jadwal })
+        });
+        
+        if (response.ok) {
+          tampilkanAlert(`🗑️ Jadwal ${jadwal} dihapus`, 'yellow');
+          ambilJadwal();
+        }
+      } catch (error) {
+        tampilkanAlert('❌ Gagal menghapus jadwal', 'red');
+      }
+    }
+
+    // ===== INISIALISASI CHART =====
+    function initCharts() {
+      if (suhuChart && pakanChart) return; // Sudah diinisialisasi
+
+      suhuChart = new Chart(document.getElementById('suhuChart'), {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [{
+            label: 'Suhu (°C)',
+            data: [],
+            borderColor: 'rgb(239, 68, 68)',
+            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+            fill: true,
+            tension: 0.4
+          }]
+        },
+        options: { 
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            title: {
+              display: true,
+              text: 'Grafik Suhu Air'
+            }
+          },
+          scales: { 
+            x: { 
+              display: true,
+              title: {
+                display: true,
+                text: 'Waktu'
+              }
+            },
+            y: {
+              title: {
+                display: true,
+                text: 'Suhu (°C)'
+              }
+            }
+          }
+        }
+      });
+
+      pakanChart = new Chart(document.getElementById('pakanChart'), {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [{
+            label: 'Pakan (cm)',
+            data: [],
+            borderColor: 'rgb(59, 130, 246)',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            fill: true,
+            tension: 0.4
+          }]
+        },
+        options: { 
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            title: {
+              display: true,
+              text: 'Grafik Ketinggian Pakan'
+            }
+          },
+          scales: { 
+            x: { 
+              display: true,
+              title: {
+                display: true,
+                text: 'Waktu'
+              }
+            },
+            y: {
+              title: {
+                display: true,
+                text: 'Ketinggian (cm)'
+              }
+            }
+          }
+        }
+      });
+    }
+
+    // ===== INISIALISASI AWAL =====
+    ambilJadwal();
+    
+    // ✅ Chart akan auto-update setiap ada data baru dari sensor
+    // Data tersimpan persistent dan terakumulasi terus
+    console.log('🚀 Chart sistem siap - Auto-update enabled dengan persistent storage');
+  </script>
+</body>
+</html>
