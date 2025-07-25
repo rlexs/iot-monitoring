@@ -3,8 +3,15 @@ const express = require('express');
 const Sensor = require('../models/sensorModel');
 const Jadwal = require('../models/jadwalModel');
 const chalk = require('chalk');
-const sendTelegramAlert = require('../utils/telegram'); // ✅ Import yang benar
+const sendTelegramAlert = require('../utils/telegram');
 let lastFeedTime = null;
+
+// ✅ Anti-spam untuk Telegram alerts
+let lastAlertTime = {
+  suhu: 0,
+  pakan: 0
+};
+const ALERT_COOLDOWN = 5 * 60 * 1000; // 5 menit cooldown
 
 const log = {
   success: (msg) => console.log(chalk.greenBright(`✅ ${msg}`)),
@@ -47,34 +54,46 @@ module.exports = function(io) {
 
       // Simpan ke database
       const saved = await Sensor.create({ suhu, pakan_cm, waktu });
-      log.success(`Data sensor disimpan ke database`);
+      log.success(`Data sensor disimpan ke database dengan ID: ${saved._id}`);
 
       // ✅ Emit data ke frontend via Socket.IO
       io.emit('sensor-update', saved);
       log.socket('Data sensor dikirim ke frontend via Socket.IO');
 
-      // ✅ Cek kondisi alert dan kirim ke Telegram
+      // ✅ Cek kondisi alert dan kirim ke Telegram (dengan cooldown)
       try {
-        // Alert suhu tidak normal
+        const now = Date.now();
+        
+        // Alert suhu tidak normal (dengan cooldown)
         if (suhu < 20 || suhu > 32) {
-          const alertMessage = `🚨 *ALERT SUHU TIDAK NORMAL!*\n\n` +
-                              `🌡️ Suhu: ${suhu}°C\n` +
-                              `⏰ Waktu: ${waktu}\n\n` +
-                              `${suhu < 20 ? '❄️ Suhu terlalu dingin!' : '🔥 Suhu terlalu panas!'}`;
-          
-          await sendTelegramAlert(alertMessage);
-          log.warning(`Alert suhu dikirim: ${suhu}°C`);
+          if (now - lastAlertTime.suhu > ALERT_COOLDOWN) {
+            const alertMessage = `🚨 *ALERT SUHU TIDAK NORMAL!*\n\n` +
+                                `🌡️ Suhu: ${suhu}°C\n` +
+                                `⏰ Waktu: ${waktu}\n\n` +
+                                `${suhu < 20 ? '❄️ Suhu terlalu dingin!' : '🔥 Suhu terlalu panas!'}`;
+            
+            await sendTelegramAlert(alertMessage);
+            lastAlertTime.suhu = now;
+            log.warning(`Alert suhu dikirim: ${suhu}°C`);
+          } else {
+            log.info(`Alert suhu di-skip (cooldown): ${suhu}°C`);
+          }
         }
 
-        // Alert pakan hampir habis
+        // Alert pakan habis (dengan cooldown)
         if (pakan_cm >= 13) {
-          const alertMessage = `⚠️ *PAKAN HAMPIR HABIS!*\n\n` +
-                              `📦 Sisa pakan: ${pakan_cm} cm\n` +
-                              `⏰ Waktu: ${waktu}\n\n` +
-                              `🐟 Segera isi ulang pakan ikan!`;
-          
-          await sendTelegramAlert(alertMessage);
-          log.warning(`Alert pakan dikirim: ${pakan_cm}cm`);
+          if (now - lastAlertTime.pakan > ALERT_COOLDOWN) {
+            const alertMessage = `⚠️ *PAKAN HABIS!*\n\n` +
+                                `📦 Jarak sensor: ${pakan_cm} cm\n` +
+                                `⏰ Waktu: ${waktu}\n\n` +
+                                `🐟 Segera isi ulang pakan ikan!`;
+            
+            await sendTelegramAlert(alertMessage);
+            lastAlertTime.pakan = now;
+            log.warning(`Alert pakan dikirim: ${pakan_cm}cm`);
+          } else {
+            log.info(`Alert pakan di-skip (cooldown): ${pakan_cm}cm`);
+          }
         }
       } catch (telegramError) {
         log.error(`Error kirim alert Telegram: ${telegramError.message}`);
