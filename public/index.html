@@ -14,13 +14,6 @@
     <!-- Judul -->
     <h1 class="text-4xl font-bold text-center mb-8 text-blue-800">📡 Monitoring IoT: Suhu & Pakan Ikan</h1>
 
-    <!-- Status Koneksi -->
-    <div id="connectionStatus" class="text-center mb-4">
-      <span id="statusText" class="px-4 py-2 rounded-full text-sm font-medium bg-yellow-200 text-yellow-800">
-        🔄 Menghubungkan...
-      </span>
-    </div>
-
     <!-- ALERT -->
     <div id="alertBox" class="hidden mb-4 p-4 rounded-lg shadow text-white font-semibold text-center"></div>
 
@@ -170,15 +163,10 @@
       }
     }
 
-    function updateConnectionStatus(connected) {
-      if (connected) {
-        statusText.textContent = '🟢 Terhubung';
-        statusText.className = 'px-4 py-2 rounded-full text-sm font-medium bg-green-200 text-green-800';
-      } else {
-        statusText.textContent = '🔴 Terputus';
-        statusText.className = 'px-4 py-2 rounded-full text-sm font-medium bg-red-200 text-red-800';
-      }
-    }
+function updateConnectionStatus(connected) {
+  // hanya console log
+  console.log(connected ? '✅ Connected' : '⚠️ Disconnected');
+}
 
     // ===== SOCKET.IO EVENT HANDLERS =====
     socket.on('connect', () => {
@@ -227,7 +215,7 @@
         const msg = `⚠️ Suhu tidak normal: ${data.suhu} °C`;
         tampilkanAlert(msg, 'red');
         kirimNotifikasiBrowser(msg);
-      } else if (data.pakan_cm < 2) {
+      } else if (data.pakan_cm < 13) {
         const msg = `⚠️ Pakan hampir habis: ${data.pakan_cm} cm`;
         tampilkanAlert(msg, 'yellow');
         kirimNotifikasiBrowser(msg);

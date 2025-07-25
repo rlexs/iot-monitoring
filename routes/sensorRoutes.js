@@ -67,7 +67,7 @@ module.exports = function(io) {
         }
 
         // Alert pakan hampir habis
-        if (pakan_cm < 2) {
+        if (pakan_cm >= 13) {
           const alertMessage = `⚠️ *PAKAN HAMPIR HABIS!*\n\n` +
                               `📦 Sisa pakan: ${pakan_cm} cm\n` +
                               `⏰ Waktu: ${waktu}\n\n` +
