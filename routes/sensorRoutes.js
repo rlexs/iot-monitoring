@@ -29,7 +29,63 @@ const log = {
 module.exports = function(io) {
   const router = express.Router();
 
-  // GET: Ambil data sensor terbaru (untuk load pertama kali)
+  // ✅ ADDED: Handler untuk display-data dari ESP32 (dual stream)
+  io.on('connection', (socket) => {
+    console.log('🔌 Client connected:', socket.id);
+    
+    // Handler untuk display data (1 menit interval dari ESP32)
+    socket.on('display-data', (data) => {
+      try {
+        const parsedData = JSON.parse(data);
+        log.info(`📺 Display data received: Suhu ${parsedData.suhu}°C, Pakan ${parsedData.pakan_cm}cm`);
+        
+        // Broadcast ke semua client untuk update UI real-time
+        io.emit('sensor-update', parsedData);
+        log.socket('Display data broadcasted to all clients (not saved to DB)');
+      } catch (error) {
+        log.error(`Error parsing display data: ${error.message}`);
+      }
+    });
+    
+    socket.on('disconnect', () => {
+      console.log('❌ Client disconnected:', socket.id);
+    });
+  });
+
+  // ✅ NEW: Endpoint untuk display data (1 menit interval)
+  router.post('/display', (req, res) => {
+    try {
+      const { suhu, pakan_cm, waktu, display_only } = req.body;
+      
+      log.info(`📺 Display data received - Suhu: ${suhu}°C, Pakan: ${pakan_cm}cm, Waktu: ${waktu}`);
+
+      // Validasi data
+      if (suhu === undefined || pakan_cm === undefined || !waktu) {
+        return res.status(400).json({ error: 'Data tidak lengkap' });
+      }
+
+      // ✅ Emit data ke frontend via Socket.IO (TIDAK DISIMPAN ke database)
+      const displayData = {
+        suhu,
+        pakan_cm,
+        waktu,
+        display_only: true,
+        createdAt: new Date().toISOString()
+      };
+      
+      io.emit('sensor-update', displayData);
+      log.socket('Display data dikirim ke frontend via Socket.IO (not saved)');
+
+      res.status(200).json({ 
+        message: 'Display data received and broadcasted',
+        saved_to_db: false
+      });
+
+    } catch (err) {
+      log.error(`Error handle display data: ${err.message}`);
+      res.status(500).json({ error: err.message });
+    }
+  });
   router.get('/current', async (req, res) => {
     try {
       const latestData = await Sensor.findOne().sort({ createdAt: -1 });
@@ -64,14 +120,6 @@ module.exports = function(io) {
       // ✅ Emit data ke frontend via Socket.IO
       io.emit('sensor-update', saved);
       log.socket('Data sensor dikirim ke frontend via Socket.IO');
-
-      io.on('connection', (socket) => {
-  socket.on('display-data', (data) => {
-    // Broadcast ke semua client tapi JANGAN save database
-    io.emit('sensor-update', JSON.parse(data));
-    console.log('📺 Display data broadcasted (not saved)');
-  });
-});
 
       // ✅ FIXED: Cek kondisi alert sesuai requirement buzzer
       try {
