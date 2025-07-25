@@ -65,6 +65,14 @@ module.exports = function(io) {
       io.emit('sensor-update', saved);
       log.socket('Data sensor dikirim ke frontend via Socket.IO');
 
+      io.on('connection', (socket) => {
+  socket.on('display-data', (data) => {
+    // Broadcast ke semua client tapi JANGAN save database
+    io.emit('sensor-update', JSON.parse(data));
+    console.log('📺 Display data broadcasted (not saved)');
+  });
+});
+
       // ✅ FIXED: Cek kondisi alert sesuai requirement buzzer
       try {
         const now = Date.now();
