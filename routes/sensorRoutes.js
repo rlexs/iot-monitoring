@@ -6,12 +6,12 @@ const chalk = require('chalk');
 const sendTelegramAlert = require('../utils/telegram');
 let lastFeedTime = null;
 
-// ✅ Anti-spam untuk Telegram alerts
+// ✅ ANTI-SPAM TELEGRAM: Cooldown 5 menit per alert type
 let lastAlertTime = {
   suhu: 0,
   pakan: 0
 };
-const ALERT_COOLDOWN = 5 * 60 * 1000; // 5 menit cooldown
+const ALERT_COOLDOWN = 5 * 60 * 1000; // 5 menit = 300,000 ms
 
 const log = {
   success: (msg) => console.log(chalk.greenBright(`✅ ${msg}`)),
@@ -54,17 +54,17 @@ module.exports = function(io) {
 
       // Simpan ke database
       const saved = await Sensor.create({ suhu, pakan_cm, waktu });
-      log.success(`Data sensor disimpan ke database dengan ID: ${saved._id}`);
+      log.success(`Data sensor disimpan ke database`);
 
       // ✅ Emit data ke frontend via Socket.IO
       io.emit('sensor-update', saved);
       log.socket('Data sensor dikirim ke frontend via Socket.IO');
 
-      // ✅ Cek kondisi alert dan kirim ke Telegram (dengan cooldown)
+      // ✅ Cek kondisi alert dan kirim ke Telegram (DENGAN ANTI-SPAM)
       try {
         const now = Date.now();
-        
-        // Alert suhu tidak normal (dengan cooldown)
+
+        // ✅ Alert suhu tidak normal (dengan cooldown 5 menit)
         if (suhu < 20 || suhu > 32) {
           if (now - lastAlertTime.suhu > ALERT_COOLDOWN) {
             const alertMessage = `🚨 *ALERT SUHU TIDAK NORMAL!*\n\n` +
@@ -74,25 +74,27 @@ module.exports = function(io) {
             
             await sendTelegramAlert(alertMessage);
             lastAlertTime.suhu = now;
-            log.warning(`Alert suhu dikirim: ${suhu}°C`);
+            log.warning(`✅ Alert suhu dikirim: ${suhu}°C`);
           } else {
-            log.info(`Alert suhu di-skip (cooldown): ${suhu}°C`);
+            const remainingTime = Math.ceil((ALERT_COOLDOWN - (now - lastAlertTime.suhu)) / 60000);
+            log.info(`⏳ Alert suhu di-skip (cooldown ${remainingTime} menit): ${suhu}°C`);
           }
         }
 
-        // Alert pakan habis (dengan cooldown)
-        if (pakan_cm >= 13) {
+        // ✅ Alert pakan habis (logika: 2cm=full, 13cm=kosong, >12cm=hampir habis)
+        if (pakan_cm > 12) {
           if (now - lastAlertTime.pakan > ALERT_COOLDOWN) {
-            const alertMessage = `⚠️ *PAKAN HABIS!*\n\n` +
+            const alertMessage = `⚠️ *PAKAN HAMPIR HABIS!*\n\n` +
                                 `📦 Jarak sensor: ${pakan_cm} cm\n` +
                                 `⏰ Waktu: ${waktu}\n\n` +
                                 `🐟 Segera isi ulang pakan ikan!`;
             
             await sendTelegramAlert(alertMessage);
             lastAlertTime.pakan = now;
-            log.warning(`Alert pakan dikirim: ${pakan_cm}cm`);
+            log.warning(`✅ Alert pakan dikirim: ${pakan_cm}cm`);
           } else {
-            log.info(`Alert pakan di-skip (cooldown): ${pakan_cm}cm`);
+            const remainingTime = Math.ceil((ALERT_COOLDOWN - (now - lastAlertTime.pakan)) / 60000);
+            log.info(`⏳ Alert pakan di-skip (cooldown ${remainingTime} menit): ${pakan_cm}cm`);
           }
         }
       } catch (telegramError) {

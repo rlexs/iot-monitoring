@@ -162,26 +162,20 @@
       }
     }
 
-    function updateConnectionStatus(connected) {
-      // hanya console log
-      console.log(connected ? '✅ Connected' : '⚠️ Disconnected');
-    }
+    // ✅ REMOVED: updateConnectionStatus function - tidak ada UI status
 
     // ===== SOCKET.IO EVENT HANDLERS =====
     socket.on('connect', () => {
       console.log('✅ Socket.IO terhubung');
-      updateConnectionStatus(true);
       loadCurrentData(); // Load data terbaru saat connect
     });
 
     socket.on('disconnect', () => {
       console.log('❌ Socket.IO terputus');
-      updateConnectionStatus(false);
     });
 
     socket.on('connect_error', (error) => {
       console.log('❌ Socket.IO connection error:', error);
-      updateConnectionStatus(false);
       // Fallback: tetap load data via HTTP meski Socket.IO error
       loadCurrentData();
     });
@@ -190,7 +184,6 @@
     setTimeout(() => {
       if (!socket.connected) {
         console.log('🔄 Socket.IO timeout, menggunakan HTTP polling');
-        updateConnectionStatus(true); // Ubah status jadi connected
         loadCurrentData();
         // Start polling every 30 seconds sebagai backup
         setInterval(loadCurrentData, 30000);
@@ -209,12 +202,12 @@
       document.getElementById('current-pakan').textContent = `${data.pakan_cm} cm`;
       document.getElementById('current-jam').textContent = data.waktu || '--:--';
 
-      // ✅ FIX: Alert logic yang benar
+      // ✅ Cek kondisi alert (FIXED: logika pakan 2cm=full, 13cm=kosong)
       if (data.suhu < 20 || data.suhu > 32) {
         const msg = `⚠️ Suhu tidak normal: ${data.suhu} °C`;
         tampilkanAlert(msg, 'red');
         kirimNotifikasiBrowser(msg);
-      } else if (data.pakan_cm > 12) {  // ✅ FIXED: > 12 (bukan < 13)
+      } else if (data.pakan_cm > 12) {  // ✅ FIXED: >12cm = pakan hampir habis/kosong
         const msg = `⚠️ Pakan habis: ${data.pakan_cm} cm`;
         tampilkanAlert(msg, 'yellow');
         kirimNotifikasiBrowser(msg);

@@ -26,7 +26,7 @@ mongoose.connect(process.env.MONGO_URI, {
 
   const PORT = process.env.PORT || 3000;
   server.listen(PORT, () => {
-    console.log(`🚀 Server jalan di http://13.250.159.102:${PORT}`);
+    console.log(`🚀 Server jalan di http://192.168.100.25:${PORT}`);
   });
 }).catch(err => console.error("❌ Gagal konek MongoDB:", err));
 
