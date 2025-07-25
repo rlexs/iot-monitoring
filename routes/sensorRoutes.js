@@ -1,4 +1,4 @@
-// routes/sensorRoutes.js - FIXED VERSION
+// routes/sensorRoutes.js - FULL CODE dengan Display Endpoint
 const express = require('express');
 const Sensor = require('../models/sensorModel');
 const Jadwal = require('../models/jadwalModel');
@@ -10,11 +10,11 @@ let lastFeedTime = null;
 let lastAlertTime = {
   suhu: 0,
   pakan: 0,
-  combined: 0  // ✅ ADDED: untuk alert gabungan
+  combined: 0  // ✅ untuk alert gabungan
 };
 const ALERT_COOLDOWN = 5 * 60 * 1000; // 5 menit = 300,000 ms
 
-// ✅ FIXED: Tracking jadwal execution untuk debugging
+// ✅ Tracking jadwal execution untuk debugging
 let scheduleExecutionLog = [];
 
 const log = {
@@ -29,19 +29,19 @@ const log = {
 module.exports = function(io) {
   const router = express.Router();
 
-  // ✅ ADDED: Handler untuk display-data dari ESP32 (dual stream)
+  // ✅ NEW: Socket.IO connection handler untuk display data
   io.on('connection', (socket) => {
     console.log('🔌 Client connected:', socket.id);
     
-    // Handler untuk display data (1 menit interval dari ESP32)
+    // Handler untuk display data jika ESP32 kirim via Socket.IO direct
     socket.on('display-data', (data) => {
       try {
         const parsedData = JSON.parse(data);
-        log.info(`📺 Display data received: Suhu ${parsedData.suhu}°C, Pakan ${parsedData.pakan_cm}cm`);
+        log.info(`📺 Display data via Socket: Suhu ${parsedData.suhu}°C, Pakan ${parsedData.pakan_cm}cm`);
         
         // Broadcast ke semua client untuk update UI real-time
         io.emit('sensor-update', parsedData);
-        log.socket('Display data broadcasted to all clients (not saved to DB)');
+        log.socket('Display data broadcasted to all clients via Socket.IO');
       } catch (error) {
         log.error(`Error parsing display data: ${error.message}`);
       }
@@ -52,12 +52,13 @@ module.exports = function(io) {
     });
   });
 
-  // ✅ NEW: Endpoint untuk display data (1 menit interval)
+  // ✅ NEW: Endpoint untuk display data (1 detik interval dari ESP32)
   router.post('/display', (req, res) => {
     try {
       const { suhu, pakan_cm, waktu, display_only } = req.body;
       
-      log.info(`📺 Display data received - Suhu: ${suhu}°C, Pakan: ${pakan_cm}cm, Waktu: ${waktu}`);
+      // ✅ Minimal logging untuk avoid spam (karena 1 detik interval)
+      // log.info(`📺 Display: ${suhu}°C, ${pakan_cm}cm, ${waktu}`);
 
       // Validasi data
       if (suhu === undefined || pakan_cm === undefined || !waktu) {
@@ -74,7 +75,7 @@ module.exports = function(io) {
       };
       
       io.emit('sensor-update', displayData);
-      log.socket('Display data dikirim ke frontend via Socket.IO (not saved)');
+      // log.socket('Display data broadcasted (not saved to DB)'); // Comment untuk kurangi spam
 
       res.status(200).json({ 
         message: 'Display data received and broadcasted',
@@ -86,6 +87,8 @@ module.exports = function(io) {
       res.status(500).json({ error: err.message });
     }
   });
+
+  // GET: Ambil data sensor terbaru (untuk load pertama kali)
   router.get('/current', async (req, res) => {
     try {
       const latestData = await Sensor.findOne().sort({ createdAt: -1 });
@@ -101,12 +104,12 @@ module.exports = function(io) {
     }
   });
 
-  // POST: Simpan data sensor
+  // POST: Simpan data sensor (setiap 3 menit dari ESP32)
   router.post('/kirim', async (req, res) => {
     try {
       const { suhu, pakan_cm, waktu } = req.body;
       
-      log.info(`Data diterima - Suhu: ${suhu}°C, Pakan: ${pakan_cm}cm, Waktu: ${waktu}`);
+      log.info(`Data database diterima - Suhu: ${suhu}°C, Pakan: ${pakan_cm}cm, Waktu: ${waktu}`);
 
       // Validasi data
       if (suhu === undefined || pakan_cm === undefined || !waktu) {
@@ -117,17 +120,17 @@ module.exports = function(io) {
       const saved = await Sensor.create({ suhu, pakan_cm, waktu });
       log.success(`Data sensor disimpan ke database`);
 
-      // ✅ Emit data ke frontend via Socket.IO
+      // ✅ Emit data ke frontend via Socket.IO (untuk chart update)
       io.emit('sensor-update', saved);
       log.socket('Data sensor dikirim ke frontend via Socket.IO');
 
-      // ✅ FIXED: Cek kondisi alert sesuai requirement buzzer
+      // ✅ Cek kondisi alert sesuai requirement buzzer
       try {
         const now = Date.now();
         const suhuAbnormal = (suhu < 20 || suhu > 32);
         const pakanHabis = (pakan_cm > 12); // >12cm = pakan habis
 
-        // ✅ FIXED: Alert gabungan (suhu + pakan) = prioritas tertinggi
+        // ✅ Alert gabungan (suhu + pakan) = prioritas tertinggi
         if (suhuAbnormal && pakanHabis) {
           if (now - lastAlertTime.combined > ALERT_COOLDOWN) {
             const alertMessage = `🚨 *ALERT KRITIS - GABUNGAN!*\n\n` +
@@ -144,7 +147,7 @@ module.exports = function(io) {
             log.warning(`✅ Alert GABUNGAN dikirim: Suhu ${suhu}°C + Pakan ${pakan_cm}cm`);
           }
         } 
-        // ✅ FIXED: Alert individual (hanya telegram, tanpa buzzer di ESP32)
+        // ✅ Alert individual (hanya telegram, tanpa buzzer di ESP32)
         else {
           // Alert suhu saja
           if (suhuAbnormal && now - lastAlertTime.suhu > ALERT_COOLDOWN) {
@@ -201,10 +204,10 @@ module.exports = function(io) {
     }
   });
 
-  // ✅ FIXED: POST: Pemberian pakan manual dengan buzzer notification
+  // ✅ POST: Pemberian pakan manual dengan buzzer notification
   router.post('/manual', (req, res) => {
     try {
-      // ✅ FIXED: Kirim signal ke ESP32 dengan buzzer 1x beep
+      // ✅ Kirim signal ke ESP32 dengan buzzer 1x beep
       io.emit('beri-pakan', { source: 'manual', buzzer: 1 });
       lastFeedTime = new Date();
       
@@ -240,7 +243,7 @@ module.exports = function(io) {
       await Jadwal.create({ waktu: jadwal });
       log.success(`Jadwal ditambahkan: ${jadwal}`);
       
-      // ✅ FIXED: Notify ESP32 tentang update jadwal
+      // ✅ Notify ESP32 tentang update jadwal
       io.emit('jadwal-updated', { action: 'added', waktu: jadwal });
       log.socket(`Jadwal update dikirim ke ESP32: ${jadwal}`);
       
@@ -277,7 +280,7 @@ module.exports = function(io) {
       if (result.deletedCount > 0) {
         log.warning(`Jadwal dihapus: ${jadwal}`);
         
-        // ✅ FIXED: Notify ESP32 tentang penghapusan jadwal
+        // ✅ Notify ESP32 tentang penghapusan jadwal
         io.emit('jadwal-updated', { action: 'deleted', waktu: jadwal });
         log.socket(`Jadwal delete dikirim ke ESP32: ${jadwal}`);
         
@@ -291,7 +294,7 @@ module.exports = function(io) {
     }
   });
 
-  // ✅ FIXED: POST: Log feeding dari ESP32
+  // ✅ POST: Log feeding dari ESP32
   router.post('/feeding-log', async (req, res) => {
     try {
       const { source, waktu, timestamp } = req.body;
@@ -319,7 +322,7 @@ module.exports = function(io) {
     }
   });
 
-  // ✅ FIXED: POST: Update status jadwal dari ESP32
+  // ✅ POST: Update status jadwal dari ESP32
   router.post('/jadwal-status', (req, res) => {
     try {
       const { waktu, executed, timestamp } = req.body;
@@ -340,7 +343,7 @@ module.exports = function(io) {
     }
   });
 
-  // ✅ FIXED: POST: Heartbeat dari ESP32 dengan info lengkap
+  // ✅ POST: Heartbeat dari ESP32 dengan info lengkap
   router.post('/heartbeat', (req, res) => {
     try {
       const { device, status, uptime, socket_connected, total_schedules, last_executed, current_time } = req.body;
@@ -369,7 +372,7 @@ module.exports = function(io) {
     }
   });
 
-  // ✅ FIXED: GET: Debug info untuk troubleshooting
+  // ✅ GET: Debug info untuk troubleshooting
   router.get('/debug', (req, res) => {
     try {
       const debugInfo = {
@@ -389,7 +392,7 @@ module.exports = function(io) {
     }
   });
 
-  // ✅ FIXED: Periksa jadwal otomatis setiap menit dengan logging yang lebih baik
+  // ✅ Periksa jadwal otomatis setiap menit dengan logging yang lebih baik
   setInterval(async () => {
     try {
       const now = new Date();
@@ -400,7 +403,7 @@ module.exports = function(io) {
         // Cegah spam dalam 1 menit yang sama
         if (!lastFeedTime || now - lastFeedTime > 60 * 1000) {
           
-          // ✅ FIXED: Kirim signal dengan info bahwa ini auto feeding (tanpa buzzer)
+          // ✅ Kirim signal dengan info bahwa ini auto feeding (tanpa buzzer)
           io.emit('beri-pakan', { 
             source: 'auto', 
             buzzer: 0,  // Tidak bunyi buzzer untuk auto feeding
@@ -443,7 +446,7 @@ module.exports = function(io) {
     }
   }, 60 * 1000); // Setiap 1 menit
 
-  // ✅ FIXED: Cleanup log setiap jam untuk mencegah memory leak
+  // ✅ Cleanup log setiap jam untuk mencegah memory leak
   setInterval(() => {
     if (scheduleExecutionLog.length > 100) {
       scheduleExecutionLog = scheduleExecutionLog.slice(-50); // Keep last 50 entries
