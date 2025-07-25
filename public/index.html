@@ -17,13 +17,6 @@
     <!-- ALERT -->
     <div id="alertBox" class="hidden mb-4 p-4 rounded-lg shadow text-white font-semibold text-center"></div>
 
-    <!-- ✅ ADDED: ESP32 Status Indicator (Optional) -->
-    <div class="mb-4 text-center">
-      <div id="esp32-status" class="inline-block px-4 py-2 rounded-full text-sm font-medium bg-gray-200 text-gray-600">
-        🔄 Menunggu koneksi ESP32...
-      </div>
-    </div>
-
     <!-- Ringkasan Data -->
     <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
       <div class="bg-white rounded-xl shadow-lg p-5 text-center">
@@ -85,13 +78,13 @@
       </div>
     </div>
 
-    <!-- ✅ ADDED: System Info (Optional) -->
+    <!-- System Info -->
     <div class="mt-8 text-center text-gray-500 text-sm">
       <p>💡 Debug Console: <code>debugIoT()</code> | Data Interval: 3 menit | Auto-Sync: Aktif</p>
     </div>
   </div>
 
-  <!-- ✅ FIXED JAVASCRIPT SECTION -->
+  <!-- JavaScript -->
   <script>
     // Inisialisasi Socket.IO
     const socket = io();
@@ -100,12 +93,12 @@
     // Variabel untuk chart dan persistent storage
     let suhuChart, pakanChart;
     
-    // ✅ Persistent storage untuk chart data
+    // Persistent storage untuk chart data
     const STORAGE_KEY_SUHU = 'iot_chart_suhu_data';
     const STORAGE_KEY_PAKAN = 'iot_chart_pakan_data';
     const MAX_CHART_POINTS = 100;
 
-    // ✅ FIXED: Tracking untuk ESP32 status dan feeding
+    // Tracking untuk ESP32 status dan feeding (background only)
     let esp32Status = {
       connected: false,
       last_heartbeat: null,
@@ -114,7 +107,7 @@
       last_executed: null
     };
 
-    // ✅ Fungsi save/load chart data
+    // Fungsi save/load chart data
     function saveChartData() {
       if (suhuChart && pakanChart) {
         const suhuData = {
@@ -168,7 +161,7 @@
       Notification.requestPermission();
     }
 
-    // ===== FUNGSI UTILITY =====
+    // Fungsi utility
     function tampilkanAlert(pesan, warna) {
       alertBox.textContent = pesan;
       alertBox.className = `mb-4 p-4 rounded-lg shadow font-semibold text-center text-white bg-${warna}-600`;
@@ -182,26 +175,13 @@
       }
     }
 
-    // ✅ FIXED: Update status ESP32 di UI
+    // Update status ESP32 di background (tanpa UI)
     function updateESP32Status() {
       const isHealthy = esp32Status.connected && esp32Status.socket_connected;
-      const statusElement = document.getElementById('esp32-status');
-      
-      if (isHealthy) {
-        statusElement.textContent = `🟢 ESP32 Online (${esp32Status.total_schedules} jadwal)`;
-        statusElement.className = 'inline-block px-4 py-2 rounded-full text-sm font-medium bg-green-100 text-green-800';
-      } else if (esp32Status.connected) {
-        statusElement.textContent = '🟡 ESP32 Connected (Socket Issues)';
-        statusElement.className = 'inline-block px-4 py-2 rounded-full text-sm font-medium bg-yellow-100 text-yellow-800';
-      } else {
-        statusElement.textContent = '🔴 ESP32 Offline';
-        statusElement.className = 'inline-block px-4 py-2 rounded-full text-sm font-medium bg-red-100 text-red-800';
-      }
-      
       console.log(`📡 ESP32 Status: ${isHealthy ? 'Healthy' : 'Issues'} | Socket: ${esp32Status.socket_connected} | Schedules: ${esp32Status.total_schedules}`);
     }
 
-    // ===== SOCKET.IO EVENT HANDLERS =====
+    // Socket.IO event handlers
     socket.on('connect', () => {
       console.log('✅ Socket.IO terhubung');
       loadCurrentData();
@@ -230,7 +210,7 @@
       updateDisplay(data);
     });
 
-    // ✅ FIXED: Handler untuk ESP32 heartbeat
+    // Handler untuk ESP32 heartbeat (background)
     socket.on('esp32-heartbeat', (data) => {
       esp32Status = {
         connected: true,
@@ -244,13 +224,13 @@
       console.log('💓 ESP32 Heartbeat:', data);
     });
 
-    // ✅ FIXED: Handler untuk auto feeding notification
+    // Handler untuk auto feeding notification
     socket.on('auto-feeding-triggered', (data) => {
       tampilkanAlert(`⏰ Feeding otomatis dijalankan pada ${data.schedule_time}`, 'blue');
       console.log('🍽️ Auto feeding triggered:', data);
     });
 
-    // ✅ FIXED: Handler untuk feeding execution dari ESP32
+    // Handler untuk feeding execution dari ESP32
     socket.on('feeding-executed', (data) => {
       const msg = data.source === 'manual' ? 
         `🐟 Feeding manual berhasil (${data.time})` : 
@@ -259,21 +239,26 @@
       console.log('✅ Feeding executed:', data);
     });
 
-    // ✅ FIXED: Handler untuk status jadwal update
+    // Handler untuk status jadwal update
     socket.on('jadwal-status-update', (data) => {
       console.log('📅 Jadwal status update:', data);
-      // Refresh jadwal list untuk update status
       ambilJadwal();
     });
 
-    // ===== FUNGSI UPDATE DISPLAY =====
+    // Handler untuk display data (1 menit interval)
+    socket.on('display-data', (data) => {
+      console.log('📺 Display data diterima:', data);
+      updateDisplay(data);
+    });
+
+    // Fungsi update display
     function updateDisplay(data) {
       // Update tampilan angka
       document.getElementById('current-suhu').textContent = `${data.suhu} °C`;
       document.getElementById('current-pakan').textContent = `${data.pakan_cm} cm`;
       document.getElementById('current-jam').textContent = data.waktu || '--:--';
 
-      // ✅ FIXED: Cek kondisi alert sesuai backend logic
+      // Cek kondisi alert sesuai backend logic
       const suhuAbnormal = (data.suhu < 20 || data.suhu > 32);
       const pakanHabis = (data.pakan_cm > 12);
 
@@ -291,8 +276,8 @@
         kirimNotifikasiBrowser(msg);
       }
 
-      // Update chart
-      if (suhuChart && pakanChart) {
+      // Update chart (hanya untuk data yang disimpan ke database, bukan display-only)
+      if (suhuChart && pakanChart && !data.display_only) {
         const waktu = new Date(data.createdAt || Date.now()).toLocaleTimeString('id-ID', {
           hour: '2-digit',
           minute: '2-digit',
@@ -323,7 +308,7 @@
       }
     }
 
-    // ===== FUNGSI API CALLS =====
+    // Fungsi API calls
     async function loadCurrentData() {
       try {
         const response = await fetch('/api/sensor/current');
@@ -375,9 +360,7 @@
       }
     }
 
-    // ===== EVENT LISTENERS =====
-    
-    // ✅ FIXED: Manual feeding button dengan notifikasi buzzer
+    // Event listeners
     document.getElementById('btnManual').addEventListener('click', async () => {
       try {
         const response = await fetch('/api/sensor/manual', { method: 'POST' });
@@ -434,7 +417,7 @@
       }
     });
 
-    // ===== FUNGSI JADWAL =====
+    // Fungsi jadwal
     async function ambilJadwal() {
       try {
         const res = await fetch('/api/sensor/jadwal');
@@ -478,7 +461,7 @@
       }
     }
 
-    // ===== INISIALISASI CHART =====
+    // Inisialisasi chart
     function initCharts() {
       if (suhuChart && pakanChart) return;
 
@@ -563,10 +546,10 @@
       });
     }
 
-    // ===== INISIALISASI AWAL =====
+    // Inisialisasi awal
     ambilJadwal();
     
-    // ✅ FIXED: Monitor ESP32 connection status
+    // Monitor ESP32 connection status (background)
     setInterval(() => {
       if (esp32Status.last_heartbeat) {
         const timeSinceLastHeartbeat = Date.now() - esp32Status.last_heartbeat.getTime();
@@ -577,9 +560,9 @@
       }
     }, 30000);
 
-    console.log('🚀 Sistema IoT siap - Monitor ESP32 aktif');
+    console.log('🚀 Sistema IoT siap - Monitor ESP32 aktif (background)');
     
-    // ✅ FIXED: Debug function untuk monitoring (opsional)
+    // Debug function untuk monitoring
     window.debugIoT = function() {
       console.log('=== DEBUG INFO ===');
       console.log('ESP32 Status:', esp32Status);
