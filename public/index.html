@@ -84,7 +84,6 @@
     // Inisialisasi Socket.IO
     const socket = io();
     const alertBox = document.getElementById('alertBox');
-    const statusText = document.getElementById('statusText');
 
     // Variabel untuk chart dan persistent storage
     let suhuChart, pakanChart;
@@ -163,10 +162,10 @@
       }
     }
 
-function updateConnectionStatus(connected) {
-  // hanya console log
-  console.log(connected ? '✅ Connected' : '⚠️ Disconnected');
-}
+    function updateConnectionStatus(connected) {
+      // hanya console log
+      console.log(connected ? '✅ Connected' : '⚠️ Disconnected');
+    }
 
     // ===== SOCKET.IO EVENT HANDLERS =====
     socket.on('connect', () => {
@@ -210,13 +209,13 @@ function updateConnectionStatus(connected) {
       document.getElementById('current-pakan').textContent = `${data.pakan_cm} cm`;
       document.getElementById('current-jam').textContent = data.waktu || '--:--';
 
-      // Cek kondisi alert
+      // ✅ FIX: Alert logic yang benar
       if (data.suhu < 20 || data.suhu > 32) {
         const msg = `⚠️ Suhu tidak normal: ${data.suhu} °C`;
         tampilkanAlert(msg, 'red');
         kirimNotifikasiBrowser(msg);
-      } else if (data.pakan_cm < 13) {
-        const msg = `⚠️ Pakan hampir habis: ${data.pakan_cm} cm`;
+      } else if (data.pakan_cm > 12) {  // ✅ FIXED: > 12 (bukan < 13)
+        const msg = `⚠️ Pakan habis: ${data.pakan_cm} cm`;
         tampilkanAlert(msg, 'yellow');
         kirimNotifikasiBrowser(msg);
       }
