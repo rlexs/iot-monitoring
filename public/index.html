@@ -17,6 +17,13 @@
     <!-- ALERT -->
     <div id="alertBox" class="hidden mb-4 p-4 rounded-lg shadow text-white font-semibold text-center"></div>
 
+    <!-- ✅ ADDED: ESP32 Status Indicator (Optional) -->
+    <div class="mb-4 text-center">
+      <div id="esp32-status" class="inline-block px-4 py-2 rounded-full text-sm font-medium bg-gray-200 text-gray-600">
+        🔄 Menunggu koneksi ESP32...
+      </div>
+    </div>
+
     <!-- Ringkasan Data -->
     <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
       <div class="bg-white rounded-xl shadow-lg p-5 text-center">
@@ -77,9 +84,14 @@
         <ul id="jadwalList" class="space-y-2"></ul>
       </div>
     </div>
+
+    <!-- ✅ ADDED: System Info (Optional) -->
+    <div class="mt-8 text-center text-gray-500 text-sm">
+      <p>💡 Debug Console: <code>debugIoT()</code> | Data Interval: 3 menit | Auto-Sync: Aktif</p>
+    </div>
   </div>
 
-  <!-- JavaScript -->
+  <!-- ✅ FIXED JAVASCRIPT SECTION -->
   <script>
     // Inisialisasi Socket.IO
     const socket = io();
@@ -91,7 +103,16 @@
     // ✅ Persistent storage untuk chart data
     const STORAGE_KEY_SUHU = 'iot_chart_suhu_data';
     const STORAGE_KEY_PAKAN = 'iot_chart_pakan_data';
-    const MAX_CHART_POINTS = 100; // Maksimal 100 data points untuk history panjang
+    const MAX_CHART_POINTS = 100;
+
+    // ✅ FIXED: Tracking untuk ESP32 status dan feeding
+    let esp32Status = {
+      connected: false,
+      last_heartbeat: null,
+      socket_connected: false,
+      total_schedules: 0,
+      last_executed: null
+    };
 
     // ✅ Fungsi save/load chart data
     function saveChartData() {
@@ -106,7 +127,6 @@
         };
         
         try {
-          // Gunakan in-memory storage object sebagai fallback localStorage
           window.chartStorage = window.chartStorage || {};
           window.chartStorage[STORAGE_KEY_SUHU] = JSON.stringify(suhuData);
           window.chartStorage[STORAGE_KEY_PAKAN] = JSON.stringify(pakanData);
@@ -162,12 +182,29 @@
       }
     }
 
-    // ✅ REMOVED: updateConnectionStatus function - tidak ada UI status
+    // ✅ FIXED: Update status ESP32 di UI
+    function updateESP32Status() {
+      const isHealthy = esp32Status.connected && esp32Status.socket_connected;
+      const statusElement = document.getElementById('esp32-status');
+      
+      if (isHealthy) {
+        statusElement.textContent = `🟢 ESP32 Online (${esp32Status.total_schedules} jadwal)`;
+        statusElement.className = 'inline-block px-4 py-2 rounded-full text-sm font-medium bg-green-100 text-green-800';
+      } else if (esp32Status.connected) {
+        statusElement.textContent = '🟡 ESP32 Connected (Socket Issues)';
+        statusElement.className = 'inline-block px-4 py-2 rounded-full text-sm font-medium bg-yellow-100 text-yellow-800';
+      } else {
+        statusElement.textContent = '🔴 ESP32 Offline';
+        statusElement.className = 'inline-block px-4 py-2 rounded-full text-sm font-medium bg-red-100 text-red-800';
+      }
+      
+      console.log(`📡 ESP32 Status: ${isHealthy ? 'Healthy' : 'Issues'} | Socket: ${esp32Status.socket_connected} | Schedules: ${esp32Status.total_schedules}`);
+    }
 
     // ===== SOCKET.IO EVENT HANDLERS =====
     socket.on('connect', () => {
       console.log('✅ Socket.IO terhubung');
-      loadCurrentData(); // Load data terbaru saat connect
+      loadCurrentData();
     });
 
     socket.on('disconnect', () => {
@@ -176,16 +213,14 @@
 
     socket.on('connect_error', (error) => {
       console.log('❌ Socket.IO connection error:', error);
-      // Fallback: tetap load data via HTTP meski Socket.IO error
       loadCurrentData();
     });
 
-    // Timeout fallback: jika dalam 3 detik tidak connect, anggap data dari HTTP
+    // Timeout fallback
     setTimeout(() => {
       if (!socket.connected) {
         console.log('🔄 Socket.IO timeout, menggunakan HTTP polling');
         loadCurrentData();
-        // Start polling every 30 seconds sebagai backup
         setInterval(loadCurrentData, 30000);
       }
     }, 3000);
@@ -195,25 +230,68 @@
       updateDisplay(data);
     });
 
+    // ✅ FIXED: Handler untuk ESP32 heartbeat
+    socket.on('esp32-heartbeat', (data) => {
+      esp32Status = {
+        connected: true,
+        last_heartbeat: new Date(),
+        socket_connected: data.socket_connected,
+        total_schedules: data.total_schedules,
+        last_executed: data.last_executed,
+        current_time: data.current_time
+      };
+      updateESP32Status();
+      console.log('💓 ESP32 Heartbeat:', data);
+    });
+
+    // ✅ FIXED: Handler untuk auto feeding notification
+    socket.on('auto-feeding-triggered', (data) => {
+      tampilkanAlert(`⏰ Feeding otomatis dijalankan pada ${data.schedule_time}`, 'blue');
+      console.log('🍽️ Auto feeding triggered:', data);
+    });
+
+    // ✅ FIXED: Handler untuk feeding execution dari ESP32
+    socket.on('feeding-executed', (data) => {
+      const msg = data.source === 'manual' ? 
+        `🐟 Feeding manual berhasil (${data.time})` : 
+        `⏰ Feeding otomatis berhasil (${data.time})`;
+      tampilkanAlert(msg, 'green');
+      console.log('✅ Feeding executed:', data);
+    });
+
+    // ✅ FIXED: Handler untuk status jadwal update
+    socket.on('jadwal-status-update', (data) => {
+      console.log('📅 Jadwal status update:', data);
+      // Refresh jadwal list untuk update status
+      ambilJadwal();
+    });
+
     // ===== FUNGSI UPDATE DISPLAY =====
     function updateDisplay(data) {
-      // Update tampilan angka (selalu update)
+      // Update tampilan angka
       document.getElementById('current-suhu').textContent = `${data.suhu} °C`;
       document.getElementById('current-pakan').textContent = `${data.pakan_cm} cm`;
       document.getElementById('current-jam').textContent = data.waktu || '--:--';
 
-      // ✅ Cek kondisi alert (FIXED: logika pakan 2cm=full, 13cm=kosong)
-      if (data.suhu < 20 || data.suhu > 32) {
+      // ✅ FIXED: Cek kondisi alert sesuai backend logic
+      const suhuAbnormal = (data.suhu < 20 || data.suhu > 32);
+      const pakanHabis = (data.pakan_cm > 12);
+
+      if (suhuAbnormal && pakanHabis) {
+        const msg = `🚨 KRITIS: Suhu ${data.suhu}°C + Pakan habis (${data.pakan_cm}cm) - ESP32 buzzer 2x beep`;
+        tampilkanAlert(msg, 'red');
+        kirimNotifikasiBrowser(msg);
+      } else if (suhuAbnormal) {
         const msg = `⚠️ Suhu tidak normal: ${data.suhu} °C`;
         tampilkanAlert(msg, 'red');
         kirimNotifikasiBrowser(msg);
-      } else if (data.pakan_cm > 12) {  // ✅ FIXED: >12cm = pakan hampir habis/kosong
+      } else if (pakanHabis) {
         const msg = `⚠️ Pakan habis: ${data.pakan_cm} cm`;
         tampilkanAlert(msg, 'yellow');
         kirimNotifikasiBrowser(msg);
       }
 
-      // ✅ AUTO-UPDATE CHART dengan data baru + tetap simpan data lama
+      // Update chart
       if (suhuChart && pakanChart) {
         const waktu = new Date(data.createdAt || Date.now()).toLocaleTimeString('id-ID', {
           hour: '2-digit',
@@ -221,11 +299,9 @@
           second: '2-digit'
         });
 
-        // Cek duplikasi data berdasarkan waktu untuk avoid spam
         const lastLabel = suhuChart.data.labels[suhuChart.data.labels.length - 1];
         if (lastLabel !== waktu) {
           
-          // Jika sudah mencapai batas maksimal, hapus data terlama
           if (suhuChart.data.labels.length >= MAX_CHART_POINTS) {
             suhuChart.data.labels.shift();
             suhuChart.data.datasets[0].data.shift();
@@ -233,16 +309,13 @@
             pakanChart.data.datasets[0].data.shift();
           }
 
-          // Tambah data baru ke chart
           suhuChart.data.labels.push(waktu);
           suhuChart.data.datasets[0].data.push(data.suhu);
           pakanChart.data.labels.push(waktu);
           pakanChart.data.datasets[0].data.push(data.pakan_cm);
           
-          suhuChart.update('none'); // Update tanpa animasi untuk performa
+          suhuChart.update('none');
           pakanChart.update('none');
-          
-          // ✅ Save data ke storage setelah update
           saveChartData();
           
           console.log(`📊 Chart updated: ${waktu} - Suhu: ${data.suhu}°C, Pakan: ${data.pakan_cm}cm`);
@@ -264,12 +337,11 @@
       }
     }
 
-    // ✅ Load data awal untuk chart (jika tidak ada storage)
     async function loadInitialChartData() {
       try {
         console.log('📊 Loading initial chart data...');
         
-        const response = await fetch('/api/sensor/logs?jam=3'); // Ambil 3 jam terakhir untuk history
+        const response = await fetch('/api/sensor/logs?jam=3');
         if (response.ok) {
           const logs = await response.json();
           console.log(`📈 Loaded ${logs.length} initial data points`);
@@ -279,7 +351,6 @@
             return;
           }
 
-          // Load data ke chart (maksimal sesuai MAX_CHART_POINTS)
           const recentLogs = logs.slice(0, MAX_CHART_POINTS).reverse();
           recentLogs.forEach(log => {
             const waktu = new Date(log.createdAt).toLocaleTimeString('id-ID', {
@@ -295,8 +366,6 @@
 
           suhuChart.update();
           pakanChart.update();
-          
-          // ✅ Save initial data ke storage
           saveChartData();
           
           console.log(`✅ Chart initialized with ${recentLogs.length} data points`);
@@ -307,11 +376,15 @@
     }
 
     // ===== EVENT LISTENERS =====
+    
+    // ✅ FIXED: Manual feeding button dengan notifikasi buzzer
     document.getElementById('btnManual').addEventListener('click', async () => {
       try {
         const response = await fetch('/api/sensor/manual', { method: 'POST' });
         if (response.ok) {
-          tampilkanAlert('🐟 Pakan manual berhasil dikirim!', 'green');
+          const result = await response.json();
+          tampilkanAlert(`🐟 ${result.message} - ESP32 buzzer ${result.buzzer}`, 'green');
+          console.log('📤 Manual feeding request sent:', result);
         }
       } catch (error) {
         tampilkanAlert('❌ Gagal mengirim pakan manual', 'red');
@@ -324,12 +397,10 @@
       
       if (!chart.classList.contains('hidden')) {
         document.getElementById('toggleChart').textContent = '❌ Sembunyikan Riwayat';
-        initCharts(); // Inisialisasi chart jika belum ada
+        initCharts();
         
-        // ✅ Load data yang tersimpan setelah chart diinisialisasi
         setTimeout(() => {
           if (!loadChartData()) {
-            // Jika tidak ada data tersimpan, load dari database terbaru
             loadInitialChartData();
           }
         }, 100);
@@ -409,7 +480,7 @@
 
     // ===== INISIALISASI CHART =====
     function initCharts() {
-      if (suhuChart && pakanChart) return; // Sudah diinisialisasi
+      if (suhuChart && pakanChart) return;
 
       suhuChart = new Chart(document.getElementById('suhuChart'), {
         type: 'line',
@@ -495,9 +566,36 @@
     // ===== INISIALISASI AWAL =====
     ambilJadwal();
     
-    // ✅ Chart akan auto-update setiap ada data baru dari sensor
-    // Data tersimpan persistent dan terakumulasi terus
-    console.log('🚀 Chart sistem siap - Auto-update enabled dengan persistent storage');
+    // ✅ FIXED: Monitor ESP32 connection status
+    setInterval(() => {
+      if (esp32Status.last_heartbeat) {
+        const timeSinceLastHeartbeat = Date.now() - esp32Status.last_heartbeat.getTime();
+        if (timeSinceLastHeartbeat > 60000) { // 1 menit tanpa heartbeat
+          esp32Status.connected = false;
+          updateESP32Status();
+        }
+      }
+    }, 30000);
+
+    console.log('🚀 Sistema IoT siap - Monitor ESP32 aktif');
+    
+    // ✅ FIXED: Debug function untuk monitoring (opsional)
+    window.debugIoT = function() {
+      console.log('=== DEBUG INFO ===');
+      console.log('ESP32 Status:', esp32Status);
+      console.log('Socket Connected:', socket.connected);
+      console.log('Chart Points:', suhuChart ? suhuChart.data.labels.length : 0);
+      
+      // Fetch debug info dari backend
+      fetch('/api/sensor/debug')
+        .then(r => r.json())
+        .then(data => {
+          console.log('Backend Debug:', data);
+        })
+        .catch(e => console.log('Debug fetch error:', e));
+    };
+    
+    console.log('🔧 Debug function available: debugIoT()');
   </script>
 </body>
 </html>

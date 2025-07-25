@@ -1,4 +1,4 @@
-// routes/sensorRoutes.js
+// routes/sensorRoutes.js - FIXED VERSION
 const express = require('express');
 const Sensor = require('../models/sensorModel');
 const Jadwal = require('../models/jadwalModel');
@@ -9,9 +9,13 @@ let lastFeedTime = null;
 // ✅ ANTI-SPAM TELEGRAM: Cooldown 5 menit per alert type
 let lastAlertTime = {
   suhu: 0,
-  pakan: 0
+  pakan: 0,
+  combined: 0  // ✅ ADDED: untuk alert gabungan
 };
 const ALERT_COOLDOWN = 5 * 60 * 1000; // 5 menit = 300,000 ms
+
+// ✅ FIXED: Tracking jadwal execution untuk debugging
+let scheduleExecutionLog = [];
 
 const log = {
   success: (msg) => console.log(chalk.greenBright(`✅ ${msg}`)),
@@ -19,6 +23,7 @@ const log = {
   info: (msg) => console.log(chalk.cyanBright(`ℹ️  ${msg}`)),
   warning: (msg) => console.log(chalk.yellowBright(`⚠️  ${msg}`)),
   socket: (msg) => console.log(chalk.magentaBright(`🔌 ${msg}`)),
+  feeding: (msg) => console.log(chalk.blueBright(`🍽️  ${msg}`)),
 };
 
 module.exports = function(io) {
@@ -60,13 +65,33 @@ module.exports = function(io) {
       io.emit('sensor-update', saved);
       log.socket('Data sensor dikirim ke frontend via Socket.IO');
 
-      // ✅ Cek kondisi alert dan kirim ke Telegram (DENGAN ANTI-SPAM)
+      // ✅ FIXED: Cek kondisi alert sesuai requirement buzzer
       try {
         const now = Date.now();
+        const suhuAbnormal = (suhu < 20 || suhu > 32);
+        const pakanHabis = (pakan_cm > 12); // >12cm = pakan habis
 
-        // ✅ Alert suhu tidak normal (dengan cooldown 5 menit)
-        if (suhu < 20 || suhu > 32) {
-          if (now - lastAlertTime.suhu > ALERT_COOLDOWN) {
+        // ✅ FIXED: Alert gabungan (suhu + pakan) = prioritas tertinggi
+        if (suhuAbnormal && pakanHabis) {
+          if (now - lastAlertTime.combined > ALERT_COOLDOWN) {
+            const alertMessage = `🚨 *ALERT KRITIS - GABUNGAN!*\n\n` +
+                                `🌡️ Suhu: ${suhu}°C (${suhu < 20 ? 'Terlalu Dingin' : 'Terlalu Panas'})\n` +
+                                `📦 Pakan: ${pakan_cm} cm (HABIS)\n` +
+                                `⏰ Waktu: ${waktu}\n\n` +
+                                `⚠️ PERHATIAN: Kondisi kritis terdeteksi!\n` +
+                                `🔊 ESP32 telah bunyi buzzer 2x`;
+            
+            await sendTelegramAlert(alertMessage);
+            lastAlertTime.combined = now;
+            lastAlertTime.suhu = now; // Reset individual timers
+            lastAlertTime.pakan = now;
+            log.warning(`✅ Alert GABUNGAN dikirim: Suhu ${suhu}°C + Pakan ${pakan_cm}cm`);
+          }
+        } 
+        // ✅ FIXED: Alert individual (hanya telegram, tanpa buzzer di ESP32)
+        else {
+          // Alert suhu saja
+          if (suhuAbnormal && now - lastAlertTime.suhu > ALERT_COOLDOWN) {
             const alertMessage = `🚨 *ALERT SUHU TIDAK NORMAL!*\n\n` +
                                 `🌡️ Suhu: ${suhu}°C\n` +
                                 `⏰ Waktu: ${waktu}\n\n` +
@@ -75,15 +100,10 @@ module.exports = function(io) {
             await sendTelegramAlert(alertMessage);
             lastAlertTime.suhu = now;
             log.warning(`✅ Alert suhu dikirim: ${suhu}°C`);
-          } else {
-            const remainingTime = Math.ceil((ALERT_COOLDOWN - (now - lastAlertTime.suhu)) / 60000);
-            log.info(`⏳ Alert suhu di-skip (cooldown ${remainingTime} menit): ${suhu}°C`);
           }
-        }
 
-        // ✅ Alert pakan habis (logika: 2cm=full, 13cm=kosong, >12cm=hampir habis)
-        if (pakan_cm > 12) {
-          if (now - lastAlertTime.pakan > ALERT_COOLDOWN) {
+          // Alert pakan saja
+          if (pakanHabis && now - lastAlertTime.pakan > ALERT_COOLDOWN) {
             const alertMessage = `⚠️ *PAKAN HAMPIR HABIS!*\n\n` +
                                 `📦 Jarak sensor: ${pakan_cm} cm\n` +
                                 `⏰ Waktu: ${waktu}\n\n` +
@@ -92,14 +112,10 @@ module.exports = function(io) {
             await sendTelegramAlert(alertMessage);
             lastAlertTime.pakan = now;
             log.warning(`✅ Alert pakan dikirim: ${pakan_cm}cm`);
-          } else {
-            const remainingTime = Math.ceil((ALERT_COOLDOWN - (now - lastAlertTime.pakan)) / 60000);
-            log.info(`⏳ Alert pakan di-skip (cooldown ${remainingTime} menit): ${pakan_cm}cm`);
           }
         }
       } catch (telegramError) {
         log.error(`Error kirim alert Telegram: ${telegramError.message}`);
-        // Jangan return error, biarkan data tetap tersimpan
       }
 
       res.status(201).json({ 
@@ -129,13 +145,26 @@ module.exports = function(io) {
     }
   });
 
-  // POST: Pemberian pakan manual
+  // ✅ FIXED: POST: Pemberian pakan manual dengan buzzer notification
   router.post('/manual', (req, res) => {
     try {
-      io.emit('beri-pakan');
+      // ✅ FIXED: Kirim signal ke ESP32 dengan buzzer 1x beep
+      io.emit('beri-pakan', { source: 'manual', buzzer: 1 });
       lastFeedTime = new Date();
-      log.warning('📦 Pakan manual dikirim dari web');
-      res.json({ message: 'Pakan manual berhasil dikirim' });
+      
+      // Log untuk debugging
+      log.feeding('📦 Pakan manual dikirim dari web - Buzzer 1x beep');
+      scheduleExecutionLog.push({
+        type: 'manual',
+        time: new Date().toLocaleTimeString('id-ID'),
+        source: 'website_button'
+      });
+      
+      res.json({ 
+        message: 'Pakan manual berhasil dikirim',
+        buzzer: '1x beep',
+        time: lastFeedTime.toLocaleTimeString('id-ID')
+      });
     } catch (err) {
       log.error(`Error pakan manual: ${err.message}`);
       res.status(500).json({ error: err.message });
@@ -154,6 +183,11 @@ module.exports = function(io) {
 
       await Jadwal.create({ waktu: jadwal });
       log.success(`Jadwal ditambahkan: ${jadwal}`);
+      
+      // ✅ FIXED: Notify ESP32 tentang update jadwal
+      io.emit('jadwal-updated', { action: 'added', waktu: jadwal });
+      log.socket(`Jadwal update dikirim ke ESP32: ${jadwal}`);
+      
       res.json({ message: '✅ Jadwal berhasil disimpan' });
     } catch (err) {
       if (err.code === 11000) {
@@ -186,6 +220,11 @@ module.exports = function(io) {
       
       if (result.deletedCount > 0) {
         log.warning(`Jadwal dihapus: ${jadwal}`);
+        
+        // ✅ FIXED: Notify ESP32 tentang penghapusan jadwal
+        io.emit('jadwal-updated', { action: 'deleted', waktu: jadwal });
+        log.socket(`Jadwal delete dikirim ke ESP32: ${jadwal}`);
+        
         res.json({ message: '🗑️ Jadwal berhasil dihapus' });
       } else {
         res.status(404).json({ error: 'Jadwal tidak ditemukan' });
@@ -196,25 +235,165 @@ module.exports = function(io) {
     }
   });
 
-  // ⏰ Periksa jadwal otomatis setiap menit
+  // ✅ FIXED: POST: Log feeding dari ESP32
+  router.post('/feeding-log', async (req, res) => {
+    try {
+      const { source, waktu, timestamp } = req.body;
+      
+      scheduleExecutionLog.push({
+        type: source,
+        time: waktu,
+        timestamp: timestamp,
+        received_at: new Date().toLocaleTimeString('id-ID')
+      });
+      
+      log.feeding(`Feeding log diterima: ${source} pada ${waktu}`);
+      
+      // Broadcast ke frontend untuk update real-time
+      io.emit('feeding-executed', {
+        source: source,
+        time: waktu,
+        timestamp: timestamp
+      });
+      
+      res.json({ message: 'Feeding log received' });
+    } catch (err) {
+      log.error(`Error feeding log: ${err.message}`);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ✅ FIXED: POST: Update status jadwal dari ESP32
+  router.post('/jadwal-status', (req, res) => {
+    try {
+      const { waktu, executed, timestamp } = req.body;
+      
+      log.feeding(`Jadwal ${waktu} executed: ${executed} pada ${new Date(timestamp).toLocaleTimeString('id-ID')}`);
+      
+      // Broadcast status ke frontend
+      io.emit('jadwal-status-update', {
+        waktu: waktu,
+        executed: executed,
+        timestamp: timestamp
+      });
+      
+      res.json({ message: 'Status updated' });
+    } catch (err) {
+      log.error(`Error update jadwal status: ${err.message}`);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ✅ FIXED: POST: Heartbeat dari ESP32 dengan info lengkap
+  router.post('/heartbeat', (req, res) => {
+    try {
+      const { device, status, uptime, socket_connected, total_schedules, last_executed, current_time } = req.body;
+      
+      log.info(`💓 ${device}: ${status} | Socket: ${socket_connected} | Jadwal: ${total_schedules} | Last: ${last_executed || 'none'}`);
+      
+      // Broadcast heartbeat ke frontend untuk monitoring
+      io.emit('esp32-heartbeat', {
+        device: device,
+        status: status,
+        uptime: uptime,
+        socket_connected: socket_connected,
+        total_schedules: total_schedules,
+        last_executed: last_executed,
+        current_time: current_time,
+        server_time: new Date().toLocaleTimeString('id-ID')
+      });
+      
+      res.json({ 
+        message: 'Heartbeat received',
+        server_time: new Date().toISOString()
+      });
+    } catch (err) {
+      log.error(`Error heartbeat: ${err.message}`);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ✅ FIXED: GET: Debug info untuk troubleshooting
+  router.get('/debug', (req, res) => {
+    try {
+      const debugInfo = {
+        last_feed_time: lastFeedTime,
+        alert_cooldowns: lastAlertTime,
+        schedule_execution_log: scheduleExecutionLog.slice(-10), // Last 10 entries
+        connected_clients: io.engine.clientsCount,
+        server_time: new Date().toLocaleTimeString('id-ID'),
+        uptime: process.uptime()
+      };
+      
+      log.info('Debug info dikirim');
+      res.json(debugInfo);
+    } catch (err) {
+      log.error(`Error debug info: ${err.message}`);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ✅ FIXED: Periksa jadwal otomatis setiap menit dengan logging yang lebih baik
   setInterval(async () => {
     try {
       const now = new Date();
-      const hhmm = now.toTimeString().slice(0, 5);
+      const hhmm = now.toTimeString().slice(0, 5); // Format: "07:30"
       const jadwals = await Jadwal.find({ waktu: hhmm });
       
       if (jadwals.length > 0) {
         // Cegah spam dalam 1 menit yang sama
         if (!lastFeedTime || now - lastFeedTime > 60 * 1000) {
-          io.emit('beri-pakan');
+          
+          // ✅ FIXED: Kirim signal dengan info bahwa ini auto feeding (tanpa buzzer)
+          io.emit('beri-pakan', { 
+            source: 'auto', 
+            buzzer: 0,  // Tidak bunyi buzzer untuk auto feeding
+            schedule_time: hhmm 
+          });
+          
           lastFeedTime = now;
-          log.success(`⏰ Pakan otomatis dikirim: ${hhmm}`);
+          
+          // Log execution
+          scheduleExecutionLog.push({
+            type: 'auto',
+            time: hhmm,
+            triggered_at: now.toLocaleTimeString('id-ID'),
+            socket_sent: true
+          });
+          
+          log.feeding(`⏰ Pakan otomatis dikirim: ${hhmm} (tanpa buzzer)`);
+          log.socket(`Signal 'beri-pakan' dikirim ke ESP32 untuk jadwal ${hhmm}`);
+          
+          // Notify frontend tentang auto feeding
+          io.emit('auto-feeding-triggered', {
+            schedule_time: hhmm,
+            triggered_at: now.toLocaleTimeString('id-ID')
+          });
+          
+        } else {
+          const timeDiff = Math.ceil((60 * 1000 - (now - lastFeedTime)) / 1000);
+          log.info(`⏳ Jadwal ${hhmm} di-skip (cooldown ${timeDiff}s)`);
         }
       }
+      
+      // ✅ Debug log setiap 10 menit untuk monitoring
+      if (now.getMinutes() % 10 === 0 && now.getSeconds() === 0) {
+        const totalJadwal = await Jadwal.countDocuments();
+        log.info(`🕐 Cek jadwal: ${hhmm} | Total jadwal: ${totalJadwal} | Socket clients: ${io.engine.clientsCount}`);
+      }
+      
     } catch (err) {
       log.error(`Error cek jadwal otomatis: ${err.message}`);
     }
-  }, 60 * 1000);
+  }, 60 * 1000); // Setiap 1 menit
+
+  // ✅ FIXED: Cleanup log setiap jam untuk mencegah memory leak
+  setInterval(() => {
+    if (scheduleExecutionLog.length > 100) {
+      scheduleExecutionLog = scheduleExecutionLog.slice(-50); // Keep last 50 entries
+      log.info('🧹 Schedule execution log cleaned up');
+    }
+  }, 60 * 60 * 1000); // Setiap 1 jam
 
   return router;
 };
