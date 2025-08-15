@@ -128,7 +128,7 @@ module.exports = function(io) {
       try {
         const now = Date.now();
         const suhuAbnormal = (suhu < 20 || suhu > 32);
-        const pakanHabis = (pakan_cm > 12); // >12cm = pakan habis
+        const pakanHabis = (pakan_cm > 13,5); // >13cm = pakan habis
 
         // ✅ Alert gabungan (suhu + pakan) = prioritas tertinggi
         if (suhuAbnormal && pakanHabis) {
