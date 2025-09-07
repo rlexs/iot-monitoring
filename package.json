@@ -1,0 +1,20 @@
+{
+  "name": "iot-monitoring-tailwind-full",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "concurrently \"node server.js\" \"npx tailwindcss -i ./src/styles/style.css -o ./public/style.css --watch\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0",
+    "tailwindcss": "^3.4.1"
+  },
+  "dependencies": {
+    "axios": "^1.10.0",
+    "chalk": "^4.1.2",
+    "cors": "^2.8.5",
+    "dotenv": "^17.0.1",
+    "express": "^5.1.0",
+    "mongoose": "^8.16.1",
+    "socket.io": "^2.4.1"
+  }
+}
